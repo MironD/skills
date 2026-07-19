@@ -1,4 +1,11 @@
+---
+name: code-review
+description: Use when asked to perform a local code review of a diff, branch, or PR and produce a written review report.
+---
+
 You perform a local code review and save the result as a markdown file.
+
+**Mandatory dependencies:** this skill requires **[../security/SKILL.md](../security/SKILL.md)** and **[../production-review/SKILL.md](../production-review/SKILL.md)**. Load and read both in full as part of loading this skill, before starting the review — neither is optional and neither is something to skip for small diffs. See §"Security Analysis" and §"Production Readiness Analysis" below for how their findings integrate into this review's severity and decision rules.
 
 ---
 
@@ -13,6 +20,7 @@ Collect what is available without developer input:
 - Commit messages (`git log main..HEAD --oneline`, or `master` if no `main`)
 - List of changed files (`git diff main...HEAD --name-only`)
 - If there are task files, documentation, or TODOs in commit messages — take note
+- **Diff size** — count lines changed: `git diff main...HEAD --stat | tail -1`. Record in the report header. If changed lines exceed 400, note that review quality is statistically reduced and explicitly identify the 2-3 highest-risk files to focus scrutiny on. If changed lines exceed 1000, note in the report: "This PR exceeds recommended review size. Review quality may be degraded. Consider splitting into smaller changes."
 
 ### Step 2: Ask the Developer
 
@@ -22,11 +30,13 @@ After automatic collection, **always ask** the developer for what is missing for
 2. **Decision context** — "Why was this particular approach chosen? Are there constraints, dependencies, or contracts that influenced the decision?"
 3. **Additional materials** — "Is there anything that would help understand the changes better? (design documents, diagrams, discussions, related PRs in other repos)"
 4. **Scope** — "Should I review all changes relative to main/master or specific files?"
+5. **AI assistance** — "Was any part of this code generated or suggested by an AI tool (Copilot, Cursor, ChatGPT, Claude, etc.)?"
 
 **Context collection rules:**
 - If the developer provided a link to a task with acceptance criteria, use them to check implementation completeness
 - If the developer says "no context, just look at the code", conduct the review based on the code, but note in the report that a review without task context may miss business requirements
 - If the branch name and commits make the context obvious (e.g. `fix/null-pointer-in-payment-service`), confirm your understanding and ask only what is missing
+- If the code is AI-generated or AI-assisted, apply heightened scrutiny to: security vulnerabilities (AI code has 15–18% more per LOC than human-written code), tests that test the implementation rather than the specification, unnecessary dependencies, and logic that looks correct but is subtly wrong. Note "AI-assisted" in the report header.
 - Do not start code analysis until you receive a response or explicit refusal to provide context
 
 ### Review Scope — Only Code Changed in PR/Branch
@@ -101,6 +111,16 @@ Before writing any comment, answer these questions. If the answer to any is nega
 5. **Future extensibility** — can a new feature be added 6 months from now without rewriting? Is the code "closed" for extension?
 6. **3AM debuggability** — can on-call debug this code at 3 AM? Enough logs? Clear error messages? Can you tell "my service broke" from "a dependency is not responding"?
 7. **Degradation check** — does this PR make the codebase **better** or **worse**? If worse — it is not ℹ️, it is at minimum 🔵, and if structural — 🟡.
+
+### 8. Cognitive Bias and Fatigue Check (before writing comments)
+
+Research shows these biases reliably degrade code review quality — actively counteract them:
+
+- **File position bias** — files listed first in the diff receive more scrutiny than later ones. Do not review files in diff order. Instead, review in this order: (1) highest-risk files first (auth, payments, data writes, migrations), (2) core business logic, (3) utilities and config, (4) tests and docs.
+- **Authority bias** — code authored by a senior developer or tech lead tends to receive less scrutiny. Apply identical standards regardless of author seniority.
+- **Anchoring bias** — the first impression of the PR (good or bad) colors analysis of all subsequent files. Commit to completing the Pre-Analysis Phase fully before forming an overall judgment.
+- **Confirmation bias** — once a mental model is formed, contradicting evidence is discounted. If a file does not match expectations from the PR description, treat that as a signal worth investigating rather than dismissing.
+- **Review fatigue** — defect detection drops significantly after 60–90 minutes of continuous review, and at a pace faster than ~500 LOC/hour. If the review session exceeds 60 minutes or the diff is large, note in the report that later-reviewed files received reduced scrutiny and name them explicitly.
 
 ---
 
@@ -323,10 +343,10 @@ Good code makes **correct usage easy** and **incorrect usage difficult or imposs
 Check in this order — stop at 🔴 if there are blockers:
 
 1. **Architecture and systemics** — separation of concerns, layers, coupling, SRP; code **does not duplicate** existing functionality (check via grep); no temporary patches/hacks; solution matches overall architecture; controllers are thin; early return; anti-degradation of codebase; new code follows existing project patterns; implicit contracts; cognitive load; 3AM debuggability
-2. **Security** — injection, auth bypass, secrets, IDOR, SSRF
+2. **Security** — run the security skill; its 🔴/🟡/🔵/ℹ️ findings map directly onto this scale (a security 🔴 is a 🔴 here). **Privacy** — PII handling, data retention, consent, logging of sensitive data
 3. **Correctness and states** — errors ignored, race conditions, non-atomic operations, invalid state transitions, inconsistent state after failure
 4. **Idempotency and edge cases** — double execution, retry safety, NULL/empty/boundary inputs, race conditions on shared state
-5. **Reliability and failure modes** — timeouts, retry, resource leaks, graceful shutdown; for each dependency: what if it goes down / is slow / returns garbage
+5. **Reliability, failure modes, and production readiness** — run the production-review skill: feature flags and rollback readiness, timeouts/retry/circuit-breaking on external dependencies, cascading failure isolation, resource exhaustion, zero-downtime migrations, deployment/config safety, queue idempotency and ordering; for each dependency: what if it goes down / is slow / returns garbage
 6. **Resource leaks and memory** — unclosed resources, memory leaks, connection pool exhaustion, blocking without timeout, backpressure
 7. **Performance** — N+1 queries, missing indexes, queries without LIMIT, loading large collections, synchronous external calls without timeout, caching
 8. **Observability** — logging with context, metrics, tracing propagation, alerting; sensitive data not logged
@@ -334,156 +354,171 @@ Check in this order — stop at 🔴 if there are blockers:
 10. **Inter-service contract** — API compatibility when changing external interaction
 11. **Tests** — new functionality always covered; edge cases tested; tests meaningful, separated by layer, no duplicate checks; when logic changes, test should "turn red"
 12. **Documentation** — docstrings, README updated with functional changes; consistency of existing documentation with code
+12b. **Accessibility** — semantic HTML, ARIA correctness, keyboard navigation, focus management, color contrast, alt text (UI changes only)
+12c. **Internationalization** — translation keys, locale-aware formatting, pluralization, encoding, layout flexibility (multi-locale apps only)
 13. **Dead code** — unused imports, commented code, unreachable code, uncalled functions
 
 ---
 
-## Security Analysis (mandatory)
+## Security Analysis
 
-Security vulnerabilities must be identified before any code reaches production. This section maps to **OWASP Top 10 (2021)** and key **CWE** entries. Check every item that is relevant to the changed code.
+Read and apply **[../security/SKILL.md](../security/SKILL.md)** in full. It covers OWASP Top 10, additional high-value CWEs, secrets, injection, auth/authz, data protection, infrastructure security, severity calibration, and a complete review checklist.
 
-> If any security issue is found, the result is **🔴 — Request Changes**, no exceptions.
+> Code examples in the security skill are written in **Go**. Translate patterns to the language and packages used in the codebase being reviewed — the vulnerability class and fix principle are the same regardless of stack.
 
----
-
-### A01 — Broken Access Control (CWE-284, CWE-285, CWE-639)
-
-- **Missing authentication** — endpoint or function accessible without login where it should require it (CWE-306)
-- **Missing authorization** — authenticated user can access resources they do not own; object ID accepted without ownership check (IDOR, CWE-639)
-- **Privilege escalation** — lower-privilege user can trigger higher-privilege action; role check bypassed via parameter manipulation
-- **Forced browsing** — direct URL/endpoint access bypasses UI-level restrictions
-- **CORS misconfiguration** — wildcard `Access-Control-Allow-Origin` on credentialed endpoints; arbitrary origins reflected
-
-Check: for every new endpoint or function that reads/writes data, verify: (1) authentication required, (2) authorization enforced, (3) ownership of the resource verified against the authenticated identity.
+> A **🔴** security finding — **Request Changes**, no exceptions. A **🟡** security finding follows the same rule as any other 🟡: Request Changes unless explained. **🔵**/**ℹ️** security findings are reported but do not block on their own — don't escalate a defense-in-depth recommendation to 🔴 just because it came from the security skill.
 
 ---
 
-### A02 — Cryptographic Failures (CWE-326, CWE-327, CWE-330)
+## Production Readiness Analysis
 
-- **Hardcoded secrets** — API keys, passwords, tokens, private keys in source code or config files committed to version control (CWE-798)
-- **Weak algorithms** — MD5 or SHA-1 for password hashing; ECB mode for encryption; weak RNG for security tokens (CWE-327)
-- **Sensitive data in transit** — HTTP instead of HTTPS for sensitive data; TLS verification disabled (`verify=False`, `InsecureSkipVerify`)
-- **Sensitive data at rest** — PII, credentials, or tokens stored in plain text in DB columns, logs, or files
-- **Insufficient randomness** — security tokens, session IDs, or CSRF tokens generated with predictable/seeded RNG (CWE-330)
-- **Secrets in logs** — passwords, tokens, or PII appearing in log statements at any level
+Read and apply **[../production-review/SKILL.md](../production-review/SKILL.md)** in full. It covers feature flags and rollback readiness, failure modes and resilience of external dependencies, cascading failures, resource exhaustion, observability (logging, metrics, alerting, the "3am test"), zero-downtime database migrations, deployment and configuration safety, and queue/async processing correctness — the operational-readiness lens on a change, distinct from the correctness and architecture checks elsewhere in this skill.
+
+> Findings from the production-review skill use the severity calibration defined there; map them onto this skill's 🔴/🟡/🔵/ℹ️ scale using the equivalent `critical`/`major`/`minor`/`nit` levels.
 
 ---
 
-### A03 — Injection (CWE-89, CWE-79, CWE-78)
+## Data Privacy and PII Compliance (mandatory)
 
-- **SQL injection** — user input concatenated into SQL queries without parameterization; raw query construction with string formatting (CWE-89)
-- **Command injection** — user input passed to shell commands (`exec`, `system`, `subprocess` with `shell=True`, `os.popen`) (CWE-78)
-- **XSS** — user-controlled data rendered in HTML without escaping; `innerHTML`, `dangerouslySetInnerHTML`, `v-html` with unescaped input (CWE-79)
-- **Template injection** — user input rendered in server-side templates without sandboxing
-- **LDAP/XML/NoSQL injection** — user input embedded in LDAP filters, XPath expressions, or NoSQL query documents
+For any change that touches user data, storage, logging, or external transmission, check the following. Skip this section only if the PR demonstrably has no contact with user data.
 
-Check: trace every user-controlled value from input to any query, command, template, or output. Never concatenate — always parameterize or escape.
+### PII Identification
 
----
+- **What counts as PII:** name, email, phone, address, IP address, device ID, location, biometrics, government IDs, payment data, health data, any combination that identifies a person.
+- Identify every field, column, log statement, and API response in the PR that may contain PII.
+- If PII is handled in a new way (new field, new log, new endpoint response), all items below apply.
 
-### A04 — Insecure Design (CWE-73, CWE-284)
+### Storage
 
-- **Missing rate limiting** — authentication endpoints, password reset, OTP verification, or expensive operations without rate limiting
-- **Predictable resource identifiers** — sequential IDs exposed in URLs instead of UUIDs or opaque tokens
-- **Business logic flaws** — can a user skip a required step (e.g., payment before order)? Can state be manipulated out of sequence?
-- **Mass assignment** — request body bound directly to model/entity without field allowlist; attacker can set fields like `is_admin`, `role`, `price`
+- PII stored in a new DB column: is the column encrypted at rest, or does the existing table encryption cover it?
+- Is there a data retention policy? Does PII have a defined TTL, or is it stored indefinitely? Severity 🟡 if no retention policy for new PII storage.
+- Is there a deletion path? If a user requests erasure (GDPR Article 17), can this PII be deleted without manual intervention? Severity 🟡 if no deletion path.
+- Data minimization: is only the minimum necessary data being stored? Collecting fields "just in case" is 🔵.
 
----
+### Transmission
 
-### A05 — Security Misconfiguration (CWE-16, CWE-732)
+- PII transmitted to a third-party service: is it documented and consented to in the privacy policy?
+- PII sent over HTTP (not HTTPS): 🔴.
+- PII included in URLs (query params, path segments) where it may appear in server logs: 🟡.
 
-- **Debug mode in production** — `DEBUG=True`, stack traces, verbose error messages exposed to end users
-- **Default credentials** — default admin passwords, API keys, or service accounts not changed
-- **Unnecessary features enabled** — unused HTTP methods, unnecessary endpoints, admin interfaces exposed publicly
-- **Missing security headers** — `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Strict-Transport-Security` absent on responses serving HTML
-- **Overly permissive file permissions** — configuration files, secrets, or private keys world-readable (CWE-732)
-- **Exposed internal details** — server version, framework version, internal paths in error responses or headers
+### Logging
 
----
+- PII appearing in any log statement (even at DEBUG level): 🔴. This includes user IDs in combination with sensitive fields, email addresses, tokens, and payment data.
+- Ensure error messages that reference user data mask or omit the sensitive parts.
 
-### A06 — Vulnerable and Outdated Components (CWE-1035)
+### Consent and Regulatory
 
-- **New dependency added** — check for known CVEs in the added package and its version; flag if a known vulnerability exists
-- **Dependency pinned to `latest`** — non-deterministic builds; supply chain risk
-- **Dependency duplicates existing one** — two libraries doing the same thing increase attack surface
-- **Transitive dependency risk** — new package pulls in many transitive dependencies; flag if the dependency tree is unusually large for a simple use case
+- If a new type of data is being collected that was not previously disclosed: flag as 🟡 — legal/privacy review required before merge.
+- Cross-border data transfer (user data from EU stored in non-EU systems): flag as 🟡 — legal review required.
+- If the codebase has a consent management layer, verify new data collection flows through it.
 
----
+### Privacy Severity
 
-### A07 — Identification and Authentication Failures (CWE-287, CWE-384)
-
-- **Weak session management** — session tokens not invalidated on logout; fixed session IDs; session not rotated after privilege change
-- **Insecure password handling** — passwords compared without timing-safe comparison; stored without proper hashing (bcrypt, argon2, scrypt)
-- **Missing multi-factor enforcement** — sensitive operations (password change, account deletion, payment) don't require re-authentication
-- **Account enumeration** — login or reset endpoints return different responses for existing vs non-existing accounts
-
----
-
-### A08 — Software and Data Integrity Failures (CWE-502, CWE-494)
-
-- **Unsafe deserialization** — deserializing user-controlled data with `pickle`, `unserialize`, `ObjectInputStream`, `YAML.load` without safe loader (CWE-502); can lead to RCE
-- **Unsafe `eval`/`exec`** — executing user-controlled strings as code
-- **Unverified downloads** — fetching and executing code or packages without signature/checksum verification
-- **CI/CD pipeline integrity** — new build steps or actions introduced that fetch from external sources without pinning
+| Issue | Severity | Blocks? |
+|-------|----------|---------|
+| PII in logs (any level) | 🔴 | yes |
+| PII transmitted over HTTP | 🔴 | yes |
+| New PII collected without consent/disclosure | 🟡 | yes |
+| No deletion path for new PII storage | 🟡 | yes |
+| No retention policy for new PII storage | 🟡 | yes |
+| PII in URL query params / path segments | 🟡 | yes |
+| Cross-border data transfer without review | 🟡 | yes |
+| Data collected beyond what is necessary | 🔵 | no |
 
 ---
 
-### A09 — Security Logging and Monitoring Failures (CWE-778, CWE-223)
+## Accessibility (a11y) — UI Changes Only
 
-- **Security events not logged** — failed authentication attempts, access control violations, input validation failures not recorded
-- **Insufficient log detail** — security events logged without timestamp, user identity, or source IP
-- **Sensitive data in logs** — passwords, tokens, session IDs, credit card numbers logged even on error paths (CWE-532)
-- **No alerting on critical failures** — repeated failed logins, privilege escalation attempts produce no alert
+Skip this section if the PR has no UI changes (no HTML, JSX/TSX, Vue templates, or CSS). Apply to any code that renders user-facing content.
+
+### Semantic Structure
+
+- Interactive elements use native elements (`<button>`, `<a href>`, `<input>`) rather than `<div>` or `<span>` with click handlers. Non-semantic elements with click handlers require `role`, `tabindex="0"`, and keyboard event handlers: 🟡.
+- Form inputs have associated `<label>` elements (via `for`/`id` or wrapping). Inputs without labels are inaccessible to screen readers: 🟡.
+- Heading hierarchy is logical (`h1` → `h2` → `h3`), not used for visual styling alone: 🔵.
+- Page/section landmarks present (`<main>`, `<nav>`, `<header>`, `<footer>`, ARIA landmark roles): 🔵.
+
+### ARIA Usage
+
+- ARIA attributes are used only when native semantics are insufficient (prefer native HTML first).
+- `aria-label` / `aria-labelledby` present on icons, icon buttons, and controls without visible text labels: 🟡.
+- Dynamic content updates use `aria-live` regions so screen readers are notified: 🔵.
+- `aria-hidden="true"` not applied to elements that are keyboard-focusable: 🔴.
+- ARIA roles are valid and used correctly (e.g., `role="dialog"` on modals with focus trap): 🟡.
+
+### Keyboard and Focus
+
+- All interactive elements reachable and operable via keyboard (Tab, Enter, Space, Arrow keys): 🟡.
+- Focus is never trapped unintentionally. Modal dialogs must trap focus within themselves and restore focus on close: 🟡.
+- Custom components (dropdowns, date pickers, tabs) implement standard keyboard patterns per ARIA Authoring Practices Guide: 🔵.
+- `:focus-visible` styles are not suppressed (`outline: none` without a replacement is 🔵).
+
+### Visual
+
+- Color is not the sole means of conveying information (e.g., error state indicated by color AND icon/text): 🟡.
+- Text contrast ratio ≥ 4.5:1 for normal text, ≥ 3:1 for large text (WCAG AA). Cannot verify contrast from code alone — flag if hardcoded color values look marginal: 🔵.
+- Images have descriptive `alt` text. Decorative images have `alt=""`: 🟡.
+- Videos/audio have captions or transcripts: 🟡.
+- No content flashes more than 3 times per second (seizure risk): 🔴.
+
+### a11y Severity Summary
+
+| Issue | Severity | Blocks? |
+|-------|----------|---------|
+| Content flashing > 3 times/sec | 🔴 | yes |
+| `aria-hidden` on focusable element | 🔴 | yes |
+| Interactive element not keyboard-reachable | 🟡 | yes |
+| Input without label | 🟡 | yes |
+| Color as sole information conveyor | 🟡 | yes |
+| Missing `alt` on meaningful image | 🟡 | yes |
+| Focus trap not implemented on modal | 🟡 | yes |
+| Missing `aria-label` on icon button | 🟡 | yes |
+| Missing ARIA live region for dynamic updates | 🔵 | no |
+| Focus outline suppressed without replacement | 🔵 | no |
+| Suboptimal heading hierarchy | 🔵 | no |
 
 ---
 
-### A10 — SSRF (CWE-918)
+## Internationalization (i18n) and Localization (l10n) — Multi-Locale Apps Only
 
-- **User-controlled URL fetched server-side** — user supplies a URL that the server fetches; attacker can target internal services, metadata endpoints (`169.254.169.254`), or localhost
-- **Missing URL validation** — no allowlist of permitted domains/schemes; `file://`, `gopher://`, `dict://` protocols not blocked
-- **Internal service exposure** — SSRF can reach internal APIs, databases, or cloud metadata services that should not be network-accessible
+Skip this section if the application is confirmed to be single-locale only. Apply to any code that renders user-facing text, formats dates/numbers/currency, or handles user input.
 
----
+### Strings and Text
 
-### Additional High-Value CWEs
+- Hardcoded user-facing strings (not loaded from a translation key/message catalog): 🟡. Every visible string must go through the project's i18n API (e.g., `t('key')`, `intl.formatMessage`, `i18n.t`).
+- String concatenation used to form sentences: 🟡. Concatenation breaks in languages with different word order. Use message templates with named placeholders instead (`"Welcome, {name}!"` not `"Welcome, " + name + "!"`).
+- Pluralization handled with a simple `s` suffix or ternary: 🔵. Use the project's pluralization API (ICU format, `Intl.PluralRules`, etc.) to handle language-specific plural rules.
+- Assumed fixed text direction (LTR only) in layout or string manipulation: 🔵 if the app supports RTL locales.
 
-- **Path Traversal (CWE-22)** — user-controlled input used in file path construction without normalization and containment check; `../` sequences not stripped
-- **Unrestricted File Upload (CWE-434)** — uploaded files not validated for type, content, or size; stored in web-accessible location or executed
-- **XML External Entity (XXE) (CWE-611)** — XML parser configured with external entity resolution enabled; user-supplied XML processed without disabling DTD/entities
-- **Open Redirect (CWE-601)** — redirect target taken from user input without validation against allowlist; used for phishing
-- **CSRF (CWE-352)** — state-changing requests (POST/PUT/DELETE) without CSRF token verification; especially on cookie-based auth
-- **Prototype Pollution (CWE-1321)** — JavaScript objects modified via user-controlled keys like `__proto__`, `constructor`
+### Formatting
 
----
+- Dates formatted with `.toLocaleDateString()` or locale-aware API: check that locale is passed explicitly, not assumed from system default: 🔵.
+- Numbers, currencies, or percentages formatted without `Intl.NumberFormat` or equivalent locale-aware API: 🔵.
+- Timezone handling: dates stored and transmitted as UTC, converted to user timezone only at display layer: 🔵. Storing local times is a 🟡 if the app has multi-timezone users.
+- Hardcoded currency symbols (`$`, `€`) in UI code: 🔵.
 
-### Security Severity
+### Layout and Visual
 
-All security findings are 🔴 by default. The only exception:
+- Fixed-width containers that cannot accommodate text expansion: German and Finnish strings can be 30–50% longer than English equivalents. Rigid pixel widths on text containers are 🔵.
+- Icon or image assets with embedded text (not translatable): 🔵 — recommend SVG with separate text layer or text overlay.
 
-| Issue | Severity |
-|-------|----------|
-| SQL/command/code injection | 🔴 |
-| RCE via deserialization or eval | 🔴 |
-| Missing authentication on protected endpoint | 🔴 |
-| IDOR — resource accessed without ownership check | 🔴 |
-| Hardcoded secrets or credentials | 🔴 |
-| Broken access control / privilege escalation | 🔴 |
-| SSRF with internal network access | 🔴 |
-| Unsafe file upload executed server-side | 🔴 |
-| Sensitive data in logs (passwords, tokens, PII) | 🔴 |
-| XSS in user-facing output | 🔴 |
-| Missing rate limiting on auth/OTP endpoints | 🟡 |
-| Missing CSRF protection on state-changing endpoint | 🟡 |
-| Security headers missing on HTML responses | 🟡 |
-| Open redirect via user-controlled URL | 🟡 |
-| Account enumeration via different error responses | 🟡 |
-| Weak but not broken algorithm (SHA-1 for non-password) | 🟡 |
-| New dependency with known CVE | 🟡 |
-| Debug mode / verbose errors in production | 🟡 |
-| XXE — external entity processing enabled | 🔴 |
-| Path traversal in file operations | 🔴 |
-| Missing re-authentication on sensitive action | 🟡 |
-| Prototype pollution | 🟡 |
+### Input and Encoding
+
+- Character encoding assumptions (ASCII-only validation, fixed-length DB columns that don't account for multi-byte UTF-8 characters): 🟡.
+- Input validation that rejects valid Unicode characters in names, addresses, or other user fields: 🟡.
+
+### i18n Severity Summary
+
+| Issue | Severity | Blocks? |
+|-------|----------|---------|
+| Hardcoded user-facing string | 🟡 | yes |
+| String concatenation forming sentences | 🟡 | yes |
+| ASCII-only validation on name/address fields | 🟡 | yes |
+| Fixed-width column too short for UTF-8 | 🟡 | yes |
+| Missing locale parameter on date/number format | 🔵 | no |
+| `s`-suffix pluralization | 🔵 | no |
+| Hardcoded currency symbol | 🔵 | no |
+| Fixed-width container for translatable text | 🔵 | no |
 
 ---
 
@@ -760,6 +795,27 @@ Beyond basic check "are there race conditions?":
 
 **First iteration rule:** determine severity **immediately and accurately** when first detected. Do not lower severity for a "softer" review — if a problem meets the criteria for 🟡, it should be 🟡 from iteration 1. A "recommendation" in iteration 1 that becomes 🟡 in iteration 2 is a calibration error in the first iteration. The developer must see the real picture immediately to correctly prioritize fixes.
 
+### Context-Dependent Severity
+
+The severity tables below are baselines. Adjust severity up or down based on deployment scale and blast radius:
+
+- A missing index on a table with < 1000 rows and no SLA: 🔵. On a table with > 1M rows or on a critical path: 🟡 or 🔴.
+- A missing timeout on a call to an internal service on the same network with circuit-breaking: 🔵. On a third-party API with no fallback: 🟡.
+- A race condition on a counter that only runs in a background job once per day: 🔵. On a payment or inventory path: 🔴.
+- An idempotency gap on an operation triggered manually by an admin: 🔵. On a webhook handler or queue consumer that auto-retries: 🟡.
+
+When adjusting severity, note the rationale inline: `🔵 (would be 🟡 at scale — this table has < 500 rows)`.
+
+### Severity Inflation Warning
+
+If a review produces more than 8 🟡 findings, pause and recalibrate. Ask: are these genuine warnings, or are some of them 🔵 suggestions labeled 🟡 to be "safe"? Severity inflation causes developers to lose the signal of what actually blocks the PR. A review with 10 🟡 findings is less actionable than one with 2 🟡 and 8 🔵.
+
+Guideline for a healthy severity distribution:
+
+- 🔴: 0–2 per review (more than 2 is a signal the PR needs significant rework before review)
+- 🟡: 1–5 per review
+- 🔵 + ℹ️: unlimited
+
 ### 🔴 Blocker — Request Changes guaranteed
 - SQL / commands via concatenation with user input
 - Hardcoded secrets in code
@@ -848,7 +904,7 @@ Write to `reviews/YYYY-MM-DD_HH-MM_{branch}.md`:
 
 **Date:** YYYY-MM-DD HH:MM
 **Files:** {number of files in scope}
-**Decision:** Approved / Request Changes
+**Decision:** Approved / Approved with Minor Comments / Request Changes
 
 ---
 
@@ -908,11 +964,24 @@ Write to `reviews/YYYY-MM-DD_HH-MM_{branch}.md`:
 5. If changes degrade architecture without justification — **Request Changes**
 6. If new functionality without tests — **Request Changes**
 7. If all 🟡 are explained by the author and explanation is acceptable — **Approved**
+7b. If there are only 🔵 findings and all are genuine improvements (not noise) — **Approved with Minor Comments** (author may address at discretion, no re-review required)
 8. If there are no 🔴 or 🟡 findings — **Approved**
+
+> **Approved with Minor Comments** means the PR can merge as-is. The author is encouraged but not required to address 🔵 findings. No re-review cycle is needed.
 
 ---
 
 ## Comment Quality
+
+### Communication Tone
+
+Code review feedback should be easy to act on and respectful of the author's intent. Apply these rules to every finding:
+
+- **Critique the code, not the author.** Write "This function could return early on empty input" not "You should handle empty input."
+- **Use questions for suggestions.** "Have you considered using a batch query here?" is more effective than "Change this to use a batch query."
+- **Acknowledge constraints you may not see.** If a design choice seems odd, ask before criticizing: "Is there a reason this uses a raw query instead of the ORM?" — the author may have context the diff doesn't show.
+- **Distinguish severity clearly in your language.** 🔴 findings should be stated plainly ("This will cause data loss under concurrent writes"). 🔵 findings should be framed as options ("One alternative worth considering..."). Never use aggressive language for any severity.
+- **Power dynamics.** Apply identical scrutiny regardless of whether you are reviewing a junior, peer, or senior developer's code. If reviewing across teams, assume good intent and ask before assuming an approach is wrong.
 
 **Each** finding entry in the report must contain exactly three elements (1-4 sentences total):
 
@@ -978,7 +1047,7 @@ Before returning the result, go through **each** item below. If any item is viol
 6. If a finding does not contain all three elements (problem, impact, fix), for EACH such finding add the missing elements.
 
 ### Completeness of Analysis
-7. Check that the analysis covers **all** sections: architecture, security, correctness, idempotency/edge cases, reliability/failure modes, resource leaks, performance, observability, inter-service contract, tests, documentation, dead code. If any section was skipped, go back and analyze.
+7. Check that the analysis covers **all** sections: architecture, security, data privacy, correctness, idempotency/edge cases, reliability/failure modes, resource leaks, performance, observability, inter-service contract, tests, documentation, accessibility (UI only), i18n (multi-locale apps only), dead code. If any section was skipped, go back and analyze.
 8. Was data flow analysis, failure mode analysis, absence reasoning, and state analysis applied? If changes touch external dependencies or state — these checks are mandatory.
 9. Comment ONLY on what you **saw in the code or diff**. Never fabricate names of constants, methods, classes, files, or variables you did not see. If you suspect something may exist — open the file and check before mentioning. Hallucination (referencing non-existent code) is a critical review defect that undermines developer trust.
 10. If N+1, query without LIMIT, or loading table into memory is found, it must be 🔴/🟡. If not in report — add.
