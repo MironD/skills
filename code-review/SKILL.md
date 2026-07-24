@@ -5,7 +5,7 @@ description: Use when asked to perform a local code review of a diff, branch, or
 
 You perform a local code review and save the result as a markdown file.
 
-**Mandatory dependencies:** this skill requires **[../security/SKILL.md](../security/SKILL.md)** and **[../production-review/SKILL.md](../production-review/SKILL.md)**. Load and read both in full as part of loading this skill, before starting the review — neither is optional and neither is something to skip for small diffs. See §"Security Analysis" and §"Production Readiness Analysis" below for how their findings integrate into this review's severity and decision rules.
+**Mandatory dependencies:** this skill requires **[../security/SKILL.md](../security/SKILL.md)**, **[../production-review/SKILL.md](../production-review/SKILL.md)**, and **[../code-quality/SKILL.md](../code-quality/SKILL.md)**. Load and read all three in full as part of loading this skill, before starting the review — none is optional and none is something to skip for small diffs. Additionally, load **[../architecture/SKILL.md](../architecture/SKILL.md)** whenever the diff changes architecture — new packages/modules, layer boundaries, coupling between components, design patterns, API/interface contracts, or the shape of an abstraction; skip it only when the change is confined to logic inside an existing structure (a bug fix, an added case, a tweaked query) with no structural shift. See §"Architecture Analysis", §"Code Quality Analysis", §"Security Analysis", and §"Production Readiness Analysis" below for how their findings integrate into this review's severity and decision rules.
 
 ---
 
@@ -340,9 +340,11 @@ Good code makes **correct usage easy** and **incorrect usage difficult or imposs
 
 ## Analysis Priority
 
+The code-quality skill's baseline (see §"Code Quality Analysis") isn't a separate step below — it's the standard every item in this list is checked against.
+
 Check in this order — stop at 🔴 if there are blockers:
 
-1. **Architecture and systemics** — separation of concerns, layers, coupling, SRP; code **does not duplicate** existing functionality (check via grep); no temporary patches/hacks; solution matches overall architecture; controllers are thin; early return; anti-degradation of codebase; new code follows existing project patterns; implicit contracts; cognitive load; 3AM debuggability
+1. **Architecture and systemics** — separation of concerns, layers, coupling, SRP; code **does not duplicate** existing functionality (check via grep); no temporary patches/hacks; solution matches overall architecture; controllers are thin; early return; anti-degradation of codebase; new code follows existing project patterns; implicit contracts; cognitive load; 3AM debuggability. If the diff changed architecture, run the architecture skill (see §"Architecture Analysis")
 2. **Security** — run the security skill; its 🔴/🟡/🔵/ℹ️ findings map directly onto this scale (a security 🔴 is a 🔴 here). **Privacy** — PII handling, data retention, consent, logging of sensitive data
 3. **Correctness and states** — errors ignored, race conditions, non-atomic operations, invalid state transitions, inconsistent state after failure
 4. **Idempotency and edge cases** — double execution, retry safety, NULL/empty/boundary inputs, race conditions on shared state
@@ -359,6 +361,18 @@ Check in this order — stop at 🔴 if there are blockers:
 13. **Dead code** — unused imports, commented code, unreachable code, uncalled functions
 
 ---
+
+## Architecture Analysis
+
+Read and apply **[../architecture/SKILL.md](../architecture/SKILL.md)** in full when the diff changes architecture — new packages/modules, layer boundaries, coupling between components, design patterns, API/interface contracts, or the shape of an abstraction. Skip it when the change is confined to logic inside an existing structure (a bug fix, an added case, a tweaked query) with no structural shift — the "Architectural Checklist" and "Architecture — Always First" sections above already cover that baseline for every review, applicable or not.
+
+> When applicable, its structural findings are this review's first analysis priority (see "Analysis Priority" below) and use the same 🔴/🟡/🔵/ℹ️ scale as the rest of this report.
+
+## Code Quality Analysis
+
+Read and apply **[../code-quality/SKILL.md](../code-quality/SKILL.md)** in full. It covers the language-agnostic baseline this review sits on top of — readability, DRY, error handling, logging, config/secrets, git/PR hygiene, backward compatibility, performance, and concurrency basics — distinct from the language-specific idioms a matching language skill (e.g. `../go/SKILL.md`) adds on top.
+
+> Findings from the code-quality skill use its own CRITICAL/MAJOR/MINOR calibration (§12 there); map them onto this skill's 🔴/🟡/🔵/ℹ️ scale as CRITICAL→🔴, MAJOR→🟡, MINOR→🔵.
 
 ## Security Analysis
 
